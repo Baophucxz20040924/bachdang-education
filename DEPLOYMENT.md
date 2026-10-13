@@ -1,7 +1,10 @@
 # Backend Deployment — Ubuntu 24.04 + PM2 + Nginx
 
-Manual, step-by-step deployment of the Education AI **backend** on a single VPS
+Manual, step-by-step deployment of the Education AI **backend only** on a single VPS
 (**2 vCPU / 2 GB RAM, Ubuntu 24.04 LTS**).
+
+> Scope: this guide hosts **only the backend API**. The frontend is **not** hosted
+> here, and MongoDB is **not** run locally — the database is **MongoDB Atlas** (cloud).
 
 - Database: **MongoDB Atlas** (cloud) — nothing to install on the VPS.
 - Process manager: **PM2** (fork mode, 1 instance).
@@ -102,8 +105,9 @@ MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>.mongodb.net/education_ai
 JWT_SECRET=<paste-random-64-hex>
 JWT_EXPIRES=7d
 
-# Allow your deployed frontend origin (S3/CloudFront URL or domain)
-CORS_ORIGIN=https://<your-frontend-domain>
+# Allow the origin that will call this API (your frontend's URL/domain,
+# wherever it is hosted). No trailing slash.
+CORS_ORIGIN=https://<origin-that-calls-this-api>
 
 # AI provider
 AI_PROVIDER=beeknoee
@@ -200,11 +204,8 @@ sudo certbot --nginx -d api.<your-domain>
 sudo certbot renew --dry-run   # confirm renewal works
 ```
 
-After enabling TLS, point the frontend at the HTTPS API and rebuild it:
-```
-VITE_API_BASE_URL=https://api.<your-domain>/api
-```
-Also make sure `CORS_ORIGIN` in `.env` matches the frontend's real origin, then:
+After enabling TLS, make sure `CORS_ORIGIN` in `.env` matches the real origin
+that calls this API (scheme + host, no trailing slash), then reload:
 ```bash
 pm2 reload education-ai-backend
 ```
@@ -263,7 +264,7 @@ pm2 logs education-ai-backend --lines 50
 | 413 Request Entity Too Large on upload | Raise `client_max_body_size` in the Nginx conf (must be ≥ `MAX_UPLOAD_MB`). |
 | 429 Too Many Requests unexpectedly | `TRUST_PROXY` not set to `1`; the limiter keys everyone to Nginx's IP. Set it in `.env` and `pm2 reload`. |
 | App restarts during big uploads | Memory spike hit `max_memory_restart`. Ensure swap is on (`free -h`) and `MAX_UPLOAD_MB` is low (15). |
-| CORS errors in browser | `CORS_ORIGIN` must exactly match the frontend origin (scheme + host, no trailing slash). |
+| CORS errors in browser | `CORS_ORIGIN` must exactly match the origin calling this API (scheme + host, no trailing slash). |
 | `certbot` fails | Domain A record must resolve to the VPS IP and port 80 must be open before running certbot. |
 
 ---
