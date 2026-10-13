@@ -42,22 +42,20 @@ async function run() {
   await upsertSubject('Tự nhiên và Xã hội', 'tnxh', [1, 2, 3]);
 
   // Teacher
-  const teacher = await upsertUser({ username: 'gv.lan', role: ROLES.TEACHER, fullName: 'Nguyễn Thị Lan', password: pwd });
+  const teacher = await upsertUser({ username: 'gv.trinh', role: ROLES.TEACHER, fullName: 'Nguyễn Thị Khánh Trinh', password: pwd });
 
   // Students
   const studentDefs = [
-    { username: 'hs.an', fullName: 'Trần Minh An' },
-    { username: 'hs.ha', fullName: 'Lê Thu Hà' },
-    { username: 'hs.binh', fullName: 'Phạm Văn Bình' },
+    { username: 'hs.phuc', fullName: 'Nguyễn Bảo Phúc' },
   ];
   const students = [];
   for (const d of studentDefs) {
-    students.push(await upsertUser({ ...d, role: ROLES.STUDENT, gradeLevel: 3, password: pwd }));
+    students.push(await upsertUser({ ...d, role: ROLES.STUDENT, gradeLevel: 2, password: pwd }));
   }
 
   // Class 3A at Trường Tiểu học Hoa Sen
-  let klass = await Class.findOne({ name: 'Lớp 3A' });
-  if (!klass) klass = await Class.create({ name: 'Lớp 3A', gradeLevel: 3, teachers: [teacher._id] });
+  let klass = await Class.findOne({ name: 'Lớp 2A' });
+  if (!klass) klass = await Class.create({ name: 'Lớp 2A', gradeLevel: 2, teachers: [teacher._id] });
   else if (!klass.teachers.some((t) => t.toString() === teacher._id.toString())) {
     klass.teachers.push(teacher._id);
     await klass.save();
