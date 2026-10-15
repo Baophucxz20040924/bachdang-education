@@ -1,5 +1,7 @@
 const User = require('../../models/User');
 const AuditLog = require('../../models/AuditLog');
+const Class = require('../../models/Class');
+const Membership = require('../../models/Membership');
 const { AppError, messages } = require('../../utils/errors');
 const { getPagination, paged } = require('../../utils/http');
 const { ROLES } = require('../../config/constants');
@@ -57,12 +59,72 @@ async function deactivateUser(id, actorId) {
 // --- Teacher-scoped student management -------------------------------------
 // Teachers may create, list, edit, ban/unban, and delete STUDENT accounts only.
 
-async function createStudent(data) {
-  return createUser({ ...data, role: ROLES.STUDENT });
+// Sections a teacher may use (own). Admin sees all. Optional grade filter.
+async function listTeacherClasses(user, gradeLevel) {
+  const filter = { isActive: true };
+  if (user.role !== ROLES.ADMIN) filter.teachers = user.id;
+  if (gradeLevel != null && gradeLevel !== '') filter.gradeLevel = Number(gradeLevel);
+  const classes = await Class.find(filter).select('name gradeLevel').sort({ gradeLevel: 1, name: 1 });
+  return classes.map((c) => ({ id: c._id.toString(), name: c.name, gradeLevel: c.gradeLevel }));
+}
+
+// Create a section (1/1, 1/2, ...). The creating teacher becomes an owner so
+// they keep access (progress, leaderboard). Admin may create without owning.
+async function createTeacherClass(data, actor) {
+  const teachers = actor.role === ROLES.TEACHER ? [actor.id] : [];
+  const klass = await Class.create({ name: data.name, gradeLevel: data.gradeLevel, teachers });
+  return { id: klass._id.toString(), name: klass.name, gradeLevel: klass.gradeLevel };
+}
+
+// Verify the actor may enroll into a class, then enroll (idempotent).
+async function enrollIntoClass(classId, studentId, actor) {
+  const klass = await Class.findById(classId);
+  if (!klass) throw new AppError(404, 'NOT_FOUND', 'Không tìm thấy lớp.');
+  if (actor.role !== ROLES.ADMIN) {
+    const owns = klass.teachers.some((t) => t.toString() === actor.id);
+    if (!owns) throw new AppError(403, 'FORBIDDEN', messages.FORBIDDEN);
+  }
+  await Membership.updateOne(
+    { class: klass._id, student: studentId },
+    { $setOnInsert: { active: true } },
+    { upsert: true },
+  );
+}
+
+async function createStudent(data, actor) {
+  // Validate class ownership BEFORE creating the user so we don't leave an
+  // orphan account if the class check fails.
+  if (data.classId) {
+    const klass = await Class.findById(data.classId);
+    if (!klass) throw new AppError(404, 'NOT_FOUND', 'Không tìm thấy lớp.');
+    if (actor && actor.role !== ROLES.ADMIN) {
+      const owns = klass.teachers.some((t) => t.toString() === actor.id);
+      if (!owns) throw new AppError(403, 'FORBIDDEN', messages.FORBIDDEN);
+    }
+  }
+  const created = await createUser({ ...data, role: ROLES.STUDENT });
+  if (data.classId) await enrollIntoClass(data.classId, created._id, actor);
+  return created;
 }
 
 async function listStudents(query) {
-  return listUsers({ ...query, role: ROLES.STUDENT });
+  const result = await listUsers({ ...query, role: ROLES.STUDENT });
+  // Attach each student's current section(s) so the UI can show/edit it.
+  const ids = result.items.map((u) => u._id);
+  const memberships = await Membership.find({ student: { $in: ids }, active: true })
+    .populate('class', 'name gradeLevel');
+  const byStudent = new Map();
+  for (const m of memberships) {
+    if (!m.class) continue;
+    const sid = m.student.toString();
+    if (!byStudent.has(sid)) byStudent.set(sid, []);
+    byStudent.get(sid).push({ id: m.class._id.toString(), name: m.class.name, gradeLevel: m.class.gradeLevel });
+  }
+  result.items = result.items.map((u) => ({
+    ...u,
+    classes: byStudent.get(u._id.toString()) || [],
+  }));
+  return result;
 }
 
 // Ensure the target exists AND is a student. Teachers must never touch
@@ -75,9 +137,14 @@ async function getStudentOrThrow(id) {
   return user;
 }
 
-async function updateStudent(id, data) {
+async function updateStudent(id, data, actor) {
   await getStudentOrThrow(id);
-  return updateUser(id, data);
+  // Optionally move/enroll the student into a section.
+  if (data.classId) await enrollIntoClass(data.classId, id, actor);
+  // Don't pass classId through to the generic user updater.
+  const rest = { ...data };
+  delete rest.classId;
+  return updateUser(id, rest);
 }
 
 // Ban = deactivate (cannot log in). Unban = reactivate.
@@ -137,4 +204,6 @@ module.exports = {
   updateStudent,
   setStudentActive,
   deleteStudent,
+  listTeacherClasses,
+  createTeacherClass,
 };

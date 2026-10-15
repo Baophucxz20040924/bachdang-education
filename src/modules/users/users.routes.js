@@ -5,6 +5,7 @@ const {
   updateUserSchema,
   createStudentSchema,
   updateStudentSchema,
+  createTeacherClassSchema,
 } = require('./users.schema');
 const { validate } = require('../../middleware/validate');
 const { requireAuth, requireRole } = require('../../middleware/auth');
@@ -21,6 +22,20 @@ const router = express.Router();
 // ---------------------------------------------------------------------------
 const teacherGuard = [requireAuth, requireRole(ROLES.TEACHER, ROLES.ADMIN)];
 
+// Teacher-usable class sections (for the section selector + inline create).
+router.get('/classes', teacherGuard, asyncHandler(async (req, res) => {
+  res.json({ items: await service.listTeacherClasses(req.user, req.query.gradeLevel) });
+}));
+
+router.post(
+  '/classes',
+  teacherGuard,
+  validate(createTeacherClassSchema),
+  asyncHandler(async (req, res) => {
+    res.status(201).json(await service.createTeacherClass(req.body, req.user));
+  }),
+);
+
 router.get('/students', teacherGuard, asyncHandler(async (req, res) => {
   res.json(await service.listStudents(req.query));
 }));
@@ -30,7 +45,7 @@ router.post(
   teacherGuard,
   validate(createStudentSchema),
   asyncHandler(async (req, res) => {
-    res.status(201).json(await service.createStudent(req.body));
+    res.status(201).json(await service.createStudent(req.body, req.user));
   }),
 );
 
@@ -39,7 +54,7 @@ router.patch(
   teacherGuard,
   validate(updateStudentSchema),
   asyncHandler(async (req, res) => {
-    res.json(await service.updateStudent(req.params.id, req.body));
+    res.json(await service.updateStudent(req.params.id, req.body, req.user));
   }),
 );
 

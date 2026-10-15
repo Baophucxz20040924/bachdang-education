@@ -5,7 +5,7 @@ const Attempt = require('../../models/Attempt');
 const Session = require('../../models/Session');
 const { validate } = require('../../middleware/validate');
 const { requireAuth, requireRole } = require('../../middleware/auth');
-const { requireSessionOwner } = require('../../middleware/ownership');
+const { requireSessionOwner, requireClassAccess } = require('../../middleware/ownership');
 const { ROLES } = require('../../config/constants');
 const { asyncHandler } = require('../../utils/http');
 const { AppError, messages } = require('../../utils/errors');
@@ -13,6 +13,28 @@ const { AppError, messages } = require('../../utils/errors');
 const router = express.Router();
 
 router.use(requireAuth, requireRole(ROLES.TEACHER, ROLES.ADMIN));
+
+// --- Class-level progress (per section: 1/1, 1/2, ...) ---------------------
+
+// List the sections the teacher can view (for the section selector).
+router.get('/classes', asyncHandler(async (req, res) => {
+  res.json({ items: await service.listTeacherClasses(req.user) });
+}));
+
+// Leaderboard + homework completion % for one section. requireClassAccess
+// loads req.classDoc from :classId and enforces teacher ownership.
+router.get('/classes/:classId/progress', requireClassAccess, asyncHandler(async (req, res) => {
+  res.json(await service.classProgress(req.classDoc));
+}));
+
+// Drill-down to one student's homework detail within the section.
+router.get(
+  '/classes/:classId/students/:studentId',
+  requireClassAccess,
+  asyncHandler(async (req, res) => {
+    res.json(await service.classStudentDetail(req.classDoc, req.params.studentId));
+  }),
+);
 
 // Teacher must own the session (requireSessionOwner uses :id).
 router.get('/sessions/:id', requireSessionOwner, asyncHandler(async (req, res) => {
