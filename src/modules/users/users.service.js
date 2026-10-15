@@ -65,7 +65,19 @@ async function listTeacherClasses(user, gradeLevel) {
   if (user.role !== ROLES.ADMIN) filter.teachers = user.id;
   if (gradeLevel != null && gradeLevel !== '') filter.gradeLevel = Number(gradeLevel);
   const classes = await Class.find(filter).select('name gradeLevel').sort({ gradeLevel: 1, name: 1 });
-  return classes.map((c) => ({ id: c._id.toString(), name: c.name, gradeLevel: c.gradeLevel }));
+  const ids = classes.map((c) => c._id);
+  // Count active students per class in one aggregation.
+  const counts = await Membership.aggregate([
+    { $match: { class: { $in: ids }, active: true } },
+    { $group: { _id: '$class', n: { $sum: 1 } } },
+  ]);
+  const countByClass = new Map(counts.map((c) => [c._id.toString(), c.n]));
+  return classes.map((c) => ({
+    id: c._id.toString(),
+    name: c.name,
+    gradeLevel: c.gradeLevel,
+    studentCount: countByClass.get(c._id.toString()) || 0,
+  }));
 }
 
 // Create a section (1/1, 1/2, ...). The creating teacher becomes an owner so
@@ -76,7 +88,34 @@ async function createTeacherClass(data, actor) {
   return { id: klass._id.toString(), name: klass.name, gradeLevel: klass.gradeLevel };
 }
 
-// Verify the actor may enroll into a class, then enroll (idempotent).
+// Delete a class section. Only the owning teacher (or an admin) may delete it.
+// Refuses when students are still enrolled so a teacher cannot accidentally
+// lose a class full of students — they must move/unenroll students first.
+async function deleteTeacherClass(classId, actor) {
+  const klass = await Class.findById(classId);
+  if (!klass) throw new AppError(404, 'NOT_FOUND', 'Không tìm thấy lớp.');
+  if (actor.role !== ROLES.ADMIN) {
+    const owns = klass.teachers.some((t) => t.toString() === actor.id);
+    if (!owns) throw new AppError(403, 'FORBIDDEN', messages.FORBIDDEN);
+  }
+  const studentCount = await Membership.countDocuments({ class: klass._id, active: true });
+  if (studentCount > 0) {
+    throw new AppError(
+      409,
+      'CLASS_NOT_EMPTY',
+      `Lớp còn ${studentCount} học sinh. Hãy chuyển học sinh sang lớp khác trước khi xóa.`,
+    );
+  }
+  // Remove any leftover (inactive) memberships, then the class itself.
+  await Membership.deleteMany({ class: klass._id });
+  await Class.deleteOne({ _id: klass._id });
+  return { success: true, id: klass._id.toString() };
+}
+
+// Verify the actor may enroll into a class, then enroll the student.
+// Enrollment is EXCLUSIVE: a student belongs to exactly ONE class at a time.
+// Enrolling into a new class removes any other (active or inactive) memberships
+// so the student is never left in two classes (e.g. default 2A + new 2/1).
 async function enrollIntoClass(classId, studentId, actor) {
   const klass = await Class.findById(classId);
   if (!klass) throw new AppError(404, 'NOT_FOUND', 'Không tìm thấy lớp.');
@@ -84,9 +123,12 @@ async function enrollIntoClass(classId, studentId, actor) {
     const owns = klass.teachers.some((t) => t.toString() === actor.id);
     if (!owns) throw new AppError(403, 'FORBIDDEN', messages.FORBIDDEN);
   }
+  // Remove the student from every OTHER class first (exclusive membership).
+  await Membership.deleteMany({ student: studentId, class: { $ne: klass._id } });
+  // Idempotently ensure membership in the target class and keep it active.
   await Membership.updateOne(
     { class: klass._id, student: studentId },
-    { $setOnInsert: { active: true } },
+    { $set: { active: true } },
     { upsert: true },
   );
 }
@@ -206,4 +248,5 @@ module.exports = {
   deleteStudent,
   listTeacherClasses,
   createTeacherClass,
+  deleteTeacherClass,
 };

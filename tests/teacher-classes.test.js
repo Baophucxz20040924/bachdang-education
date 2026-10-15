@@ -132,4 +132,59 @@ describe('Teacher class sections + student enrollment (/api/users/classes, stude
     const create = await request(app).post('/api/users/classes').set(auth(t)).send({ name: 'x', gradeLevel: 1 });
     expect(create.status).toBe(403);
   });
+
+  test('enrollment is EXCLUSIVE: moving a student to a new class removes the old membership', async () => {
+    const t = await login('gv.lan');
+    const classA = await Class.create({ name: 'Lớp 2A', gradeLevel: 2, teachers: [teacher._id] });
+    const classB = await Class.create({ name: 'Lớp 2/1', gradeLevel: 2, teachers: [teacher._id] });
+    const student = await h.makeUser(h.ROLES.STUDENT, { username: 'hs.one' });
+    // Start in 2A.
+    await Membership.create({ class: classA._id, student: student._id });
+
+    // Move to 2/1 via update.
+    const res = await request(app)
+      .patch(`/api/users/students/${student._id}`)
+      .set(auth(t))
+      .send({ classId: classB._id.toString() });
+    expect(res.status).toBe(200);
+
+    // Student must be in EXACTLY ONE class (the new one).
+    const all = await Membership.find({ student: student._id, active: true });
+    expect(all).toHaveLength(1);
+    expect(all[0].class.toString()).toBe(classB._id.toString());
+  });
+
+  test('teacher can delete their OWN empty class', async () => {
+    const t = await login('gv.lan');
+    const klass = await Class.create({ name: 'Lớp 3/9', gradeLevel: 3, teachers: [teacher._id] });
+    const res = await request(app).delete(`/api/users/classes/${klass._id}`).set(auth(t));
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(await Class.findById(klass._id)).toBeNull();
+  });
+
+  test('deleting a class that still has students is blocked (409)', async () => {
+    const t = await login('gv.lan');
+    const klass = await Class.create({ name: 'Lớp 3/1', gradeLevel: 3, teachers: [teacher._id] });
+    const student = await h.makeUser(h.ROLES.STUDENT, { username: 'hs.keep' });
+    await Membership.create({ class: klass._id, student: student._id });
+    const res = await request(app).delete(`/api/users/classes/${klass._id}`).set(auth(t));
+    expect(res.status).toBe(409);
+    // Class must still exist.
+    expect(await Class.findById(klass._id)).toBeTruthy();
+  });
+
+  test('teacher CANNOT delete a class they do not own (403)', async () => {
+    const t = await login('gv.lan');
+    const foreign = await Class.create({ name: 'Lớp 4/1', gradeLevel: 4, teachers: [other._id] });
+    const res = await request(app).delete(`/api/users/classes/${foreign._id}`).set(auth(t));
+    expect(res.status).toBe(403);
+    expect(await Class.findById(foreign._id)).toBeTruthy();
+  });
+
+  test('deleting an unknown class returns 404', async () => {
+    const t = await login('gv.lan');
+    const res = await request(app).delete('/api/users/classes/507f1f77bcf86cd799439011').set(auth(t));
+    expect(res.status).toBe(404);
+  });
 });

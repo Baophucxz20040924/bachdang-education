@@ -36,6 +36,10 @@ router.post(
   }),
 );
 
+router.delete('/classes/:id', teacherGuard, asyncHandler(async (req, res) => {
+  res.json(await service.deleteTeacherClass(req.params.id, req.user));
+}));
+
 router.get('/students', teacherGuard, asyncHandler(async (req, res) => {
   res.json(await service.listStudents(req.query));
 }));
