@@ -2,6 +2,7 @@ const User = require('../../models/User');
 const Session = require('../../models/Session');
 const Attempt = require('../../models/Attempt');
 const Membership = require('../../models/Membership');
+const Class = require('../../models/Class');
 const { SESSION_STATUS, ATTEMPT_STATUS, REVEAL_POLICY } = require('../../config/constants');
 const { gradeAttempt, attemptStatusAfterGrade } = require('../../utils/grading');
 const { stripAnswerKey } = require('../sessions/sessions.service');
@@ -156,16 +157,45 @@ function assignDenseRanks(list, key) {
   return list;
 }
 
-// Class leaderboard. Returns TWO rankings over the same classmates:
+// Class leaderboard. Returns TWO rankings over classmates in a SINGLE class
+// section (e.g. 1/1, 1/2, ...):
 //   • byScore     — total earned points across graded attempts (achievement)
 //   • byDiligence — number of exercises the student has done (chuyên cần / effort)
+//
+// A grade can have many sections, so a student may belong to several classes.
+// The board is always scoped to exactly ONE section:
+//   • `classId` (optional) picks the section to show. The student must be a
+//     member of it; otherwise it is ignored and the primary section is used.
+//   • When omitted, the student's primary (first-joined) section is used.
+// The response also lists every section the student belongs to (`classes`) so
+// the UI can offer a section selector, plus the resolved `classId`.
 // REQ-ST (results/leaderboard).
-async function getClassLeaderboard(studentId) {
-  const classIds = await studentClassIds(studentId);
-  if (!classIds.length) return { items: [], byScore: [], byDiligence: [], count: 0 };
+async function getClassLeaderboard(studentId, requestedClassId = null) {
+  // Sections the student belongs to, oldest first (primary = first joined).
+  const myMemberships = await Membership.find({ student: studentId, active: true }).sort({ createdAt: 1 });
+  const myClassIds = myMemberships.map((m) => m.class.toString());
 
-  // All active members of those classes (the classmates to rank).
-  const memberships = await Membership.find({ class: { $in: classIds }, active: true });
+  const empty = { items: [], byScore: [], byDiligence: [], count: 0, classId: null, classes: [] };
+  if (!myClassIds.length) return empty;
+
+  // Section metadata for the selector (name like "Lớp 1/1").
+  const classDocs = await Class.find({ _id: { $in: myClassIds } }).select('name gradeLevel');
+  const classById = new Map(classDocs.map((c) => [c._id.toString(), c]));
+  const classes = myClassIds
+    .map((id) => {
+      const c = classById.get(id);
+      return c ? { id, name: c.name, gradeLevel: c.gradeLevel } : null;
+    })
+    .filter(Boolean);
+
+  // Resolve which single section to rank. Honour a valid requested section,
+  // otherwise fall back to the primary (first-joined) one.
+  const requested = requestedClassId != null ? String(requestedClassId) : null;
+  const classId = requested && myClassIds.includes(requested) ? requested : myClassIds[0];
+  const classIds = [classId];
+
+  // All active members of THIS section (the classmates to rank).
+  const memberships = await Membership.find({ class: classId, active: true });
   const studentIds = [...new Set(memberships.map((m) => m.student.toString()))];
 
   const users = await User.find({ _id: { $in: studentIds }, isActive: true }).select('fullName gradeLevel');
@@ -240,7 +270,7 @@ async function getClassLeaderboard(studentId) {
   assignDenseRanks(byDiligence, 'completed');
 
   // `items` kept as an alias of byScore for backward compatibility.
-  return { items: byScore, byScore, byDiligence, count: base.length };
+  return { items: byScore, byScore, byDiligence, count: base.length, classId, classes };
 }
 
 // Result respects revealPolicy (REQ-ST-3).

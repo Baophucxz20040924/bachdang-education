@@ -142,3 +142,107 @@ describe('Class leaderboard (GET /api/student/leaderboard)', () => {
     expect(res.body.items.length).toBe(res.body.byScore.length);
   });
 });
+
+
+const Class = require('../src/models/Class');
+const Membership = require('../src/models/Membership');
+
+describe('Per-section leaderboard (grade with sections 1/1, 1/2, ...)', () => {
+  let s11a; let s11b; let s12a; let s12b; let classId11; let classId12;
+
+  beforeEach(async () => {
+    // Grade 1 with two sections: 1/1 and 1/2.
+    const c11 = await Class.create({ name: 'Lớp 1/1', gradeLevel: 1 });
+    const c12 = await Class.create({ name: 'Lớp 1/2', gradeLevel: 1 });
+    classId11 = c11._id.toString();
+    classId12 = c12._id.toString();
+
+    s11a = await h.makeUser(h.ROLES.STUDENT, { username: 'hs.11a', fullName: 'An Lớp Một Một', gradeLevel: 1 });
+    s11b = await h.makeUser(h.ROLES.STUDENT, { username: 'hs.11b', fullName: 'Bình Lớp Một Một', gradeLevel: 1 });
+    s12a = await h.makeUser(h.ROLES.STUDENT, { username: 'hs.12a', fullName: 'Cường Lớp Một Hai', gradeLevel: 1 });
+    s12b = await h.makeUser(h.ROLES.STUDENT, { username: 'hs.12b', fullName: 'Dũng Lớp Một Hai', gradeLevel: 1 });
+
+    await Membership.create({ class: c11._id, student: s11a._id });
+    await Membership.create({ class: c11._id, student: s11b._id });
+    await Membership.create({ class: c12._id, student: s12a._id });
+    await Membership.create({ class: c12._id, student: s12b._id });
+
+    // Scores: section 1/1 → An 8, Bình 5 ; section 1/2 → Cường 10, Dũng 3
+    await Attempt.create({ session: s11a._id, student: s11a._id, class: c11._id, status: ATTEMPT_STATUS.GRADED, totalScore: 8, maxScore: 10 });
+    await Attempt.create({ session: s11a._id, student: s11b._id, class: c11._id, status: ATTEMPT_STATUS.GRADED, totalScore: 5, maxScore: 10 });
+    await Attempt.create({ session: s12a._id, student: s12a._id, class: c12._id, status: ATTEMPT_STATUS.GRADED, totalScore: 10, maxScore: 10 });
+    await Attempt.create({ session: s12a._id, student: s12b._id, class: c12._id, status: ATTEMPT_STATUS.GRADED, totalScore: 3, maxScore: 10 });
+  });
+
+  test('a 1/1 student only sees 1/1 classmates (not 1/2)', async () => {
+    const token = await login('hs.11a');
+    const res = await request(app).get('/api/student/leaderboard').set(auth(token));
+    expect(res.status).toBe(200);
+    const names = res.body.byScore.map((i) => i.fullName);
+    expect(res.body.byScore.length).toBe(2);
+    expect(names).toContain('An Lớp Một Một');
+    expect(names).toContain('Bình Lớp Một Một');
+    expect(names).not.toContain('Cường Lớp Một Hai');
+    expect(names).not.toContain('Dũng Lớp Một Hai');
+    // Highest total within 1/1 is An (8).
+    expect(res.body.byScore[0].fullName).toBe('An Lớp Một Một');
+    expect(res.body.byScore[0].score).toBe(8);
+  });
+
+  test('a 1/2 student only sees 1/2 classmates (not 1/1)', async () => {
+    const token = await login('hs.12a');
+    const res = await request(app).get('/api/student/leaderboard').set(auth(token));
+    const names = res.body.byScore.map((i) => i.fullName);
+    expect(res.body.byScore.length).toBe(2);
+    expect(names).toContain('Cường Lớp Một Hai');
+    expect(names).toContain('Dũng Lớp Một Hai');
+    expect(names).not.toContain('An Lớp Một Một');
+    // Cường has the top score (10) in 1/2 even though 10 > An's 8 in 1/1.
+    expect(res.body.byScore[0].fullName).toBe('Cường Lớp Một Hai');
+    expect(res.body.byScore[0].score).toBe(10);
+  });
+
+  test('response lists all of the student\'s sections and the active classId', async () => {
+    const token = await login('hs.11a');
+    const res = await request(app).get('/api/student/leaderboard').set(auth(token));
+    expect(res.body.classId).toBe(classId11);
+    expect(Array.isArray(res.body.classes)).toBe(true);
+    // s11a belongs to only section 1/1.
+    expect(res.body.classes.map((c) => c.name)).toEqual(['Lớp 1/1']);
+    expect(res.body.classes[0].id).toBe(classId11);
+    expect(res.body.classes[0].gradeLevel).toBe(1);
+  });
+
+  test('a student in TWO sections can switch between them via classId', async () => {
+    // Put An (1/1) also into 1/2.
+    await Membership.create({ class: classId12, student: s11a._id });
+    const token = await login('hs.11a');
+
+    // Default: primary (first-joined) section 1/1.
+    const def = await request(app).get('/api/student/leaderboard').set(auth(token));
+    expect(def.body.classId).toBe(classId11);
+    expect(def.body.classes.map((c) => c.name).sort()).toEqual(['Lớp 1/1', 'Lớp 1/2']);
+
+    // Explicitly request 1/2 → ranked among 1/2 members (now includes An too).
+    const other = await request(app)
+      .get('/api/student/leaderboard')
+      .query({ classId: classId12 })
+      .set(auth(token));
+    expect(other.body.classId).toBe(classId12);
+    const names = other.body.byScore.map((i) => i.fullName);
+    expect(names).toContain('Cường Lớp Một Hai');
+    expect(names).toContain('An Lớp Một Một');
+    expect(names).not.toContain('Bình Lớp Một Một');
+  });
+
+  test('an invalid or non-member classId falls back to the primary section', async () => {
+    const token = await login('hs.11a');
+    const bogus = await request(app)
+      .get('/api/student/leaderboard')
+      .query({ classId: classId12 }) // s11a is NOT a member of 1/2
+      .set(auth(token));
+    // Falls back to the student's own section 1/1.
+    expect(bogus.body.classId).toBe(classId11);
+    expect(bogus.body.byScore.map((i) => i.fullName)).not.toContain('Cường Lớp Một Hai');
+  });
+});
