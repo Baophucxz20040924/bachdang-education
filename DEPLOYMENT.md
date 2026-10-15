@@ -18,7 +18,7 @@ Manual, step-by-step deployment of the Education AI **backend only** on a single
 ## 0. Before you start — checklist
 
 - [ ] VPS reachable via SSH, Ubuntu 24.04.
-- [ ] (Optional but recommended) A domain, e.g. `api.example.com`, with an **A record** pointing to the VPS public IP. Needed for HTTPS.
+- [ ] Domain **`api.thbachdangdn.io.vn`** with an **A record** pointing to the VPS public IP (required for HTTPS).
 - [ ] MongoDB Atlas cluster + connection string.
 - [ ] In **Atlas → Network Access**, add the VPS public IP (or `0.0.0.0/0` temporarily to test).
 - [ ] Your Beeknoee API key (if using real AI), or leave `AI_PROVIDER=mock`.
@@ -170,7 +170,7 @@ sudo cp /var/www/education-project/deploy/nginx/education-ai.conf \
         /etc/nginx/sites-available/education-ai.conf
 
 sudo nano /etc/nginx/sites-available/education-ai.conf
-#   -> change  server_name  to your domain (or the VPS IP if no domain)
+#   -> server_name is already set to  api.thbachdangdn.io.vn  (change only if different)
 
 sudo ln -s /etc/nginx/sites-available/education-ai.conf /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default    # remove the default welcome page
@@ -181,7 +181,7 @@ sudo systemctl reload nginx
 
 Verify through Nginx (port 80):
 ```bash
-curl http://<domain-or-IP>/api/health
+curl http://api.thbachdangdn.io.vn/api/health
 ```
 
 ## 8. Firewall
@@ -194,15 +194,23 @@ sudo ufw status
 ```
 Port 4000 stays private (only Nginx on localhost reaches it).
 
-## 9. HTTPS / TLS (requires a domain)
+## 9. HTTPS / TLS with certbot
 
-Only if you have a domain pointing to the VPS:
+First confirm the A record for `api.thbachdangdn.io.vn` resolves to your VPS IP
+and port 80 is reachable (certbot's HTTP-01 challenge needs this):
+```bash
+dig +short api.thbachdangdn.io.vn      # must print your VPS public IP
+```
+
+Then issue the certificate:
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d api.<your-domain>
+sudo certbot --nginx -d api.thbachdangdn.io.vn
 # Choose redirect HTTP->HTTPS when asked. Auto-renew is installed via systemd timer.
 sudo certbot renew --dry-run   # confirm renewal works
 ```
+certbot edits the Nginx conf to add the `:443` server block and the HTTP→HTTPS
+redirect automatically.
 
 After enabling TLS, make sure `CORS_ORIGIN` in `.env` matches the real origin
 that calls this API (scheme + host, no trailing slash), then reload:
@@ -216,10 +224,10 @@ pm2 reload education-ai-backend
 
 ```bash
 # Health
-curl https://api.<your-domain>/api/health
+curl https://api.thbachdangdn.io.vn/api/health
 
 # Login with a seeded account (if you ran npm run seed)
-curl -X POST https://api.<your-domain>/api/auth/login \
+curl -X POST https://api.thbachdangdn.io.vn/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"gv.lan","password":"<SEED_DEFAULT_PASSWORD>"}'
 # -> returns { "token": "...", "user": {...} }

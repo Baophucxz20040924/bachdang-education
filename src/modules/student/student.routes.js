@@ -35,4 +35,8 @@ router.get('/attempts', asyncHandler(async (req, res) => {
   res.json({ items: await service.listMyAttempts(req.user.id) });
 }));
 
+router.get('/leaderboard', asyncHandler(async (req, res) => {
+  res.json(await service.getClassLeaderboard(req.user.id));
+}));
+
 module.exports = router;

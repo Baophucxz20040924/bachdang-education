@@ -1,3 +1,4 @@
+const User = require('../../models/User');
 const Session = require('../../models/Session');
 const Attempt = require('../../models/Attempt');
 const Membership = require('../../models/Membership');
@@ -140,6 +141,108 @@ function toClientAttempt(attempt) {
   };
 }
 
+// Assigns dense ranks to an already-sorted list using the given numeric key.
+// Equal values share the same rank (1,1,3,...). Mutates each row's `rank`.
+function assignDenseRanks(list, key) {
+  let rank = 0;
+  let prev = null;
+  list.forEach((it, idx) => {
+    if (it[key] !== prev) {
+      rank = idx + 1;
+      prev = it[key];
+    }
+    it.rank = rank;
+  });
+  return list;
+}
+
+// Class leaderboard. Returns TWO rankings over the same classmates:
+//   • byScore     — total earned points across graded attempts (achievement)
+//   • byDiligence — number of exercises the student has done (chuyên cần / effort)
+// REQ-ST (results/leaderboard).
+async function getClassLeaderboard(studentId) {
+  const classIds = await studentClassIds(studentId);
+  if (!classIds.length) return { items: [], byScore: [], byDiligence: [], count: 0 };
+
+  // All active members of those classes (the classmates to rank).
+  const memberships = await Membership.find({ class: { $in: classIds }, active: true });
+  const studentIds = [...new Set(memberships.map((m) => m.student.toString()))];
+
+  const users = await User.find({ _id: { $in: studentIds }, isActive: true }).select('fullName gradeLevel');
+  const userById = new Map(users.map((u) => [u._id.toString(), u]));
+
+  // Pull every finished attempt for these classmates. "Finished" = submitted,
+  // needs grading, or graded — i.e. the student actually did the exercise.
+  // Score only counts scored attempts; diligence counts all finished ones.
+  const finishedStatuses = [ATTEMPT_STATUS.SUBMITTED, ATTEMPT_STATUS.NEEDS_GRADING, ATTEMPT_STATUS.GRADED];
+  const attempts = await Attempt.find({
+    student: { $in: studentIds },
+    class: { $in: classIds },
+    status: { $in: finishedStatuses },
+  }).select('student totalScore maxScore submittedAt');
+
+  // Aggregate per student.
+  const agg = new Map();
+  for (const sid of studentIds) {
+    agg.set(sid, { score: 0, max: 0, scored: 0, diligence: 0, lastActiveAt: 0 });
+  }
+  for (const a of attempts) {
+    const sid = a.student.toString();
+    const row = agg.get(sid);
+    if (!row) continue;
+    // Diligence: every finished exercise counts as effort.
+    row.diligence += 1;
+    const ts = a.submittedAt ? new Date(a.submittedAt).getTime() : 0;
+    if (ts > row.lastActiveAt) row.lastActiveAt = ts;
+    // Score: only attempts that have an actual numeric score.
+    if (a.totalScore != null) {
+      row.score += a.totalScore;
+      row.max += a.maxScore || 0;
+      row.scored += 1;
+    }
+  }
+
+  const base = studentIds
+    .map((sid) => {
+      const u = userById.get(sid);
+      if (!u) return null;
+      const row = agg.get(sid);
+      const first = (u.fullName || '').trim().split(/\s+/).slice(-1)[0] || u.fullName;
+      return {
+        studentId: sid,
+        fullName: u.fullName,
+        firstName: first,
+        gradeLevel: u.gradeLevel,
+        score: row.score,
+        maxScore: row.max,
+        completed: row.diligence,
+        lastActiveAt: row.lastActiveAt || null,
+        isMe: sid === studentId.toString(),
+      };
+    })
+    .filter(Boolean);
+
+  // Ranking 1 — achievement: highest total score first, tie-break by more
+  // exercises completed, then name.
+  const byScore = base
+    .map((r) => ({ ...r }))
+    .sort((a, b) => b.score - a.score || b.completed - a.completed || a.fullName.localeCompare(b.fullName, 'vi'));
+  assignDenseRanks(byScore, 'score');
+
+  // Ranking 2 — chuyên cần (diligence): most exercises done first, tie-break by
+  // more recent activity, then higher score, then name.
+  const byDiligence = base
+    .map((r) => ({ ...r }))
+    .sort((a, b) => b.completed - a.completed
+      || (b.lastActiveAt || 0) - (a.lastActiveAt || 0)
+      || b.score - a.score
+      || a.fullName.localeCompare(b.fullName, 'vi'));
+  assignDenseRanks(byDiligence, 'completed');
+
+  // `items` kept as an alias of byScore for backward compatibility.
+  return { items: byScore, byScore, byDiligence, count: base.length };
+}
+
 // Result respects revealPolicy (REQ-ST-3).
 async function buildResult(attempt) {
   const session = await Session.findById(attempt.session);
@@ -168,4 +271,4 @@ async function buildResult(attempt) {
   return base;
 }
 
-module.exports = { listAssigned, startAttempt, saveAnswers, submitAttempt, listMyAttempts, buildResult };
+module.exports = { listAssigned, startAttempt, saveAnswers, submitAttempt, listMyAttempts, getClassLeaderboard, buildResult };
