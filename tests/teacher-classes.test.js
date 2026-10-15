@@ -17,25 +17,33 @@ afterAll(h.close);
 afterEach(h.clear);
 
 describe('Teacher class sections + student enrollment (/api/users/classes, students classId)', () => {
-  let teacher; let other;
+  let teacher; let other; let admin;
 
   beforeEach(async () => {
     teacher = await h.makeUser(h.ROLES.TEACHER, { username: 'gv.lan' });
     other = await h.makeUser(h.ROLES.TEACHER, { username: 'gv.khac' });
+    admin = await h.makeUser(h.ROLES.ADMIN, { username: 'admin' });
   });
 
-  test('teacher can create a class section (1/1) and becomes its owner', async () => {
+  test('ADMIN can create a class section (2/1); TEACHER cannot (403)', async () => {
+    // Teacher is blocked — only admins create classes.
     const t = await login('gv.lan');
-    const res = await request(app)
+    const blocked = await request(app)
       .post('/api/users/classes')
       .set(auth(t))
-      .send({ name: 'Lớp 1/1', gradeLevel: 1 });
+      .send({ name: 'Lớp 2/1', gradeLevel: 2 });
+    expect(blocked.status).toBe(403);
+
+    // Admin succeeds.
+    const a = await login('admin');
+    const res = await request(app)
+      .post('/api/users/classes')
+      .set(auth(a))
+      .send({ name: 'Lớp 2/1', gradeLevel: 2 });
     expect(res.status).toBe(201);
-    expect(res.body.name).toBe('Lớp 1/1');
-    expect(res.body.gradeLevel).toBe(1);
-    // Teacher recorded as owner.
-    const klass = await Class.findById(res.body.id);
-    expect(klass.teachers.map((x) => x.toString())).toContain(teacher._id.toString());
+    expect(res.body.name).toBe('Lớp 2/1');
+    expect(res.body.gradeLevel).toBe(2);
+    expect(await Class.findById(res.body.id)).toBeTruthy();
   });
 
   test('GET /classes lists only the teacher\'s sections, filterable by grade', async () => {
@@ -124,7 +132,7 @@ describe('Teacher class sections + student enrollment (/api/users/classes, stude
     expect(row.classes).toEqual([{ id: klass._id.toString(), name: 'Lớp 1/1', gradeLevel: 1 }]);
   });
 
-  test('a student cannot create classes or list them (403)', async () => {
+  test('a student cannot create or list classes (403)', async () => {
     await h.makeUser(h.ROLES.STUDENT, { username: 'hs.z' });
     const t = await login('hs.z');
     const list = await request(app).get('/api/users/classes').set(auth(t));
@@ -154,37 +162,37 @@ describe('Teacher class sections + student enrollment (/api/users/classes, stude
     expect(all[0].class.toString()).toBe(classB._id.toString());
   });
 
-  test('teacher can delete their OWN empty class', async () => {
-    const t = await login('gv.lan');
+  test('ADMIN can delete an empty class; TEACHER cannot (403)', async () => {
     const klass = await Class.create({ name: 'Lớp 3/9', gradeLevel: 3, teachers: [teacher._id] });
-    const res = await request(app).delete(`/api/users/classes/${klass._id}`).set(auth(t));
+
+    // Teacher is blocked.
+    const t = await login('gv.lan');
+    const blocked = await request(app).delete(`/api/users/classes/${klass._id}`).set(auth(t));
+    expect(blocked.status).toBe(403);
+    expect(await Class.findById(klass._id)).toBeTruthy();
+
+    // Admin succeeds.
+    const a = await login('admin');
+    const res = await request(app).delete(`/api/users/classes/${klass._id}`).set(auth(a));
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(await Class.findById(klass._id)).toBeNull();
   });
 
-  test('deleting a class that still has students is blocked (409)', async () => {
-    const t = await login('gv.lan');
+  test('admin deleting a class that still has students is blocked (409)', async () => {
+    const a = await login('admin');
     const klass = await Class.create({ name: 'Lớp 3/1', gradeLevel: 3, teachers: [teacher._id] });
     const student = await h.makeUser(h.ROLES.STUDENT, { username: 'hs.keep' });
     await Membership.create({ class: klass._id, student: student._id });
-    const res = await request(app).delete(`/api/users/classes/${klass._id}`).set(auth(t));
+    const res = await request(app).delete(`/api/users/classes/${klass._id}`).set(auth(a));
     expect(res.status).toBe(409);
     // Class must still exist.
     expect(await Class.findById(klass._id)).toBeTruthy();
   });
 
-  test('teacher CANNOT delete a class they do not own (403)', async () => {
-    const t = await login('gv.lan');
-    const foreign = await Class.create({ name: 'Lớp 4/1', gradeLevel: 4, teachers: [other._id] });
-    const res = await request(app).delete(`/api/users/classes/${foreign._id}`).set(auth(t));
-    expect(res.status).toBe(403);
-    expect(await Class.findById(foreign._id)).toBeTruthy();
-  });
-
-  test('deleting an unknown class returns 404', async () => {
-    const t = await login('gv.lan');
-    const res = await request(app).delete('/api/users/classes/507f1f77bcf86cd799439011').set(auth(t));
+  test('admin deleting an unknown class returns 404', async () => {
+    const a = await login('admin');
+    const res = await request(app).delete('/api/users/classes/507f1f77bcf86cd799439011').set(auth(a));
     expect(res.status).toBe(404);
   });
 });

@@ -1,5 +1,5 @@
 const express = require('express');
-const { loginSchema } = require('./auth.schema');
+const { loginSchema, changePasswordSchema } = require('./auth.schema');
 const service = require('./auth.service');
 const { validate } = require('../../middleware/validate');
 const { requireAuth } = require('../../middleware/auth');
@@ -23,6 +23,17 @@ router.get(
   asyncHandler(async (req, res) => {
     const user = await service.me(req.user.id);
     res.json({ user });
+  }),
+);
+
+// Any authenticated user may change their own password.
+router.post(
+  '/change-password',
+  requireAuth,
+  validate(changePasswordSchema),
+  asyncHandler(async (req, res) => {
+    const { currentPassword, newPassword } = req.body;
+    res.json(await service.changePassword(req.user.id, currentPassword, newPassword));
   }),
 );
 

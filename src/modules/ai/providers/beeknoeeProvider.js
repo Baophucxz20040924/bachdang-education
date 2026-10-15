@@ -55,6 +55,13 @@ const beeknoeeProvider = {
     if (!arr || !arr.length) throw new Error('Không phân tích được câu hỏi từ Beeknoee.');
     return arr[0];
   },
+
+  // Free-form chat for the student tutor. `messages` is a full OpenAI-style
+  // array (system + context + history + user). Returns plain assistant text.
+  async chat(messages) {
+    const content = await callChatCompletions(messages, { maxTokens: 700 });
+    return String(content).trim();
+  },
 };
 
 module.exports = beeknoeeProvider;

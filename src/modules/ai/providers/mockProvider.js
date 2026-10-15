@@ -150,6 +150,64 @@ const mockProvider = {
     const seed = Math.floor(Math.random() * 97) + (ctx.seed || 0);
     return buildQuestion(type, (ctx.subjectCode || '').toLowerCase(), seed);
   },
+
+  // Offline, deterministic student-tutor chat that OBEYS the guardrails so the
+  // app (and tests) behave safely without a real AI key:
+  //   • If no lesson dataset was provided -> invite the student back, no outside info.
+  //   • If the student asks for the direct answer -> politely refuse, give method
+  //     + a SIMILAR practice example instead.
+  //   • If the question is clearly outside the dataset -> steer back to lessons.
+  //   • Otherwise -> a friendly, encouraging, on-topic nudge.
+  async chat(messages) {
+    // Combine all system messages (SYSTEM_PROMPT also mentions "DỮ LIỆU BÀI HỌC",
+    // so we must look for the actual data marker across every system message).
+    const datasetText = messages
+      .filter((m) => m.role === 'system' && typeof m.content === 'string')
+      .map((m) => m.content)
+      .join('\n');
+    const hasDataset = datasetText.includes('<<<DU_LIEU_BAI_HOC');
+    const dsLower = datasetText.toLowerCase();
+    const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+    const q = (lastUser?.content || '').toLowerCase();
+
+    // 1) Clearly NON-educational / unsafe topics -> gently steer back to learning.
+    const OFF_TOPIC = ['bitcoin', 'crypto', 'tiền ảo', 'tổng thống', 'president', 'bạo lực', 'cá cược', 'bóng đá', 'tiktok'];
+    const offHit = OFF_TOPIC.find((w) => q.includes(w) && !dsLower.includes(w));
+    if (offHit) {
+      return 'Chuyện này không thuộc việc học của chúng mình em nhé 😊. '
+        + 'Mình quay lại chuyện học thôi — em muốn cô giúp em hiểu bài nào, hay cần mẹo học bài không?';
+    }
+
+    // 2) Asking for the DIRECT answer to an exercise -> refuse + method + example.
+    const wantsAnswer = /(đáp án|đáp số|kết quả|giải giúp|giải hộ|làm hộ|làm giúp|cho mình đáp|cho em đáp|answer|là bao nhiêu|bằng mấy|bằng bao nhiêu)/.test(q);
+    if (wantsAnswer) {
+      return 'Cô sẽ không cho đáp án trực tiếp đâu, vì tự tìm ra em sẽ nhớ lâu hơn nhiều! 😊 '
+        + 'Cô gợi ý cách làm: đọc kỹ đề, xem đề cho gì và hỏi gì, rồi làm từng bước nhỏ. '
+        + 'Thử một VÍ DỤ TƯƠNG TỰ nhé: nếu đề là "3 + 4 = ?" thì em đếm thêm 4 đơn vị từ 3. '
+        + 'Em áp dụng cách đó vào bài của mình xem sao nha! 🌟';
+    }
+
+    // 3) General study-skills questions (how to learn / remember) -> helpful tips.
+    const studyTip = /(nhớ bài|học thuộc|ghi nhớ|học hiệu quả|tập trung|ôn tập|học giỏi|làm sao để học|cách học)/.test(q);
+    if (studyTip) {
+      return 'Câu hỏi hay lắm em! 🌟 Vài mẹo nhỏ giúp em nhớ bài lâu hơn: '
+        + '(1) học thành từng phần nhỏ rồi tự nhắc lại; (2) đọc xong hãy kể lại bằng lời của em; '
+        + '(3) ôn lại sau 1 ngày rồi sau vài ngày; (4) vừa học vừa cho ví dụ gần gũi. '
+        + 'Em thử áp dụng khi học bài trên lớp nhé, cô tin em làm được! 😊';
+    }
+
+    // 4) No specific lesson yet -> still welcome general learning help.
+    if (!hasDataset) {
+      return 'Chào em! 😊 Lớp mình chưa có bài học nào được giao, nhưng cô vẫn có thể giúp em '
+        + 'những điều chung về học tập như mẹo ghi nhớ, cách học hiệu quả hay giải thích một khái niệm. '
+        + 'Khi nào có bài, em quay lại để cô hướng dẫn đúng nội dung lớp đang học nhé! 🌟';
+    }
+
+    // 5) Default: friendly, encouraging, on-topic help without revealing answers.
+    return 'Câu hỏi hay lắm em! 🌟 Cô sẽ cùng em ôn lại nhé. Em thử nêu cách em định làm, '
+      + 'rồi cô sẽ gợi ý thêm bằng một ví dụ tương tự để em luyện tập. '
+      + 'Em đang thắc mắc ở phần nào nhất? 😊';
+  },
 };
 
 module.exports = mockProvider;

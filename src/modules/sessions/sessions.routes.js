@@ -45,7 +45,7 @@ router.get('/:id', requireSessionOwner, asyncHandler(async (req, res) => {
 }));
 
 router.patch('/:id', requireSessionOwner, validate(updateSchema), asyncHandler(async (req, res) => {
-  res.json(await service.updateSession(req.sessionDoc, req.body));
+  res.json(await service.updateSession(req.sessionDoc, req.body, req.user));
 }));
 
 router.post('/:id/duplicate', requireSessionOwner, asyncHandler(async (req, res) => {
@@ -68,7 +68,7 @@ router.patch('/:id/reorder', requireSessionOwner, validate(reorderSchema), async
 
 // Lifecycle
 router.post('/:id/publish', requireSessionOwner, asyncHandler(async (req, res) => {
-  res.json(await service.publish(req.sessionDoc, req.user.id));
+  res.json(await service.publish(req.sessionDoc, req.user));
 }));
 router.post('/:id/unpublish', requireSessionOwner, asyncHandler(async (req, res) => {
   res.json(await service.unpublish(req.sessionDoc));

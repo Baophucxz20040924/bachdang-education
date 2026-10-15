@@ -1,11 +1,29 @@
 const { v4: uuidv4 } = require('uuid');
 const Session = require('../../models/Session');
 const Attempt = require('../../models/Attempt');
+const Class = require('../../models/Class');
 const { validateQuestion } = require('./question.schema');
-const { SESSION_STATUS } = require('../../config/constants');
+const { SESSION_STATUS, ROLES } = require('../../config/constants');
 const { AppError, messages } = require('../../utils/errors');
 const { getPagination, paged } = require('../../utils/http');
 const AuditLog = require('../../models/AuditLog');
+
+// Teachers may only assign a lesson to classes they are assigned to (admin may
+// target any class). Verifies every id in `classIds` is a class the teacher
+// manages; throws 403 otherwise. No-op for empty lists and for admins.
+async function assertTargetClassesAssigned(user, classIds) {
+  if (!classIds || classIds.length === 0) return;
+  if (user.role === ROLES.ADMIN) return;
+  const classes = await Class.find({ _id: { $in: classIds } }).select('teachers');
+  // Every requested class must exist AND list this teacher as an owner.
+  const okById = new Map(
+    classes.map((c) => [c._id.toString(), c.teachers.some((t) => t.toString() === user.id)]),
+  );
+  const allowed = classIds.every((id) => okById.get(String(id)) === true);
+  if (!allowed) {
+    throw new AppError(403, 'CLASS_NOT_ASSIGNED', 'Bạn chỉ có thể giao bài cho lớp mình được phân công.');
+  }
+}
 
 async function listSessions(user, query) {
   const { page, limit, skip } = getPagination(query);
@@ -22,6 +40,7 @@ async function listSessions(user, query) {
 }
 
 async function createSession(user, data) {
+  await assertTargetClassesAssigned(user, data.targetClasses || []);
   return Session.create({
     title: data.title,
     description: data.description || '',
@@ -36,7 +55,10 @@ async function createSession(user, data) {
   });
 }
 
-async function updateSession(session, data) {
+async function updateSession(session, data, user) {
+  if (data.targetClasses !== undefined) {
+    await assertTargetClassesAssigned(user, data.targetClasses || []);
+  }
   const editable = ['title', 'description', 'gradeLevel', 'subject', 'topic', 'objectives', 'targetClasses', 'settings'];
   for (const key of editable) {
     if (data[key] !== undefined) session[key] = data[key];
@@ -86,16 +108,18 @@ async function reorderQuestions(session, order) {
   return session;
 }
 
-async function publish(session, actorId) {
+async function publish(session, user) {
   const usable = session.questions.filter((q) => validateQuestion(q.toObject ? q.toObject() : q).ok);
   if (usable.length === 0) throw new AppError(400, 'SESSION_EMPTY', messages.SESSION_EMPTY);
   if (!session.targetClasses || session.targetClasses.length === 0) {
     throw new AppError(400, 'SESSION_NO_CLASS', messages.SESSION_NO_CLASS);
   }
+  // A teacher can only publish to classes they are assigned to.
+  await assertTargetClassesAssigned(user, session.targetClasses.map((c) => c.toString()));
   session.status = SESSION_STATUS.PUBLISHED;
   session.publishedAt = new Date();
   await session.save();
-  await AuditLog.create({ actor: actorId, action: 'SESSION_PUBLISH', targetType: 'Session', targetId: session._id });
+  await AuditLog.create({ actor: user.id, action: 'SESSION_PUBLISH', targetType: 'Session', targetId: session._id });
   return session;
 }
 
@@ -168,4 +192,5 @@ module.exports = {
   toStudentView,
   stripAnswerKey,
   prepareQuestion,
+  assertTargetClassesAssigned,
 };

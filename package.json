@@ -8,6 +8,7 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "seed": "node src/seed/index.js",
+    "clean:newyear": "node scripts/clean-db-newyear.js",
     "test": "cross-env NODE_ENV=test jest --runInBand --forceExit",
     "lint": "eslint src"
   },

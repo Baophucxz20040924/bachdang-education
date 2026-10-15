@@ -21,22 +21,28 @@ const router = express.Router();
 // they use their own, broader role check.
 // ---------------------------------------------------------------------------
 const teacherGuard = [requireAuth, requireRole(ROLES.TEACHER, ROLES.ADMIN)];
+// Creating/deleting classes is reserved for admins. Teachers only ASSIGN
+// students to existing (admin-created) classes.
+const adminOnly = [requireAuth, requireRole(ROLES.ADMIN)];
 
-// Teacher-usable class sections (for the section selector + inline create).
+// Teacher-usable class sections (for the section selector when creating/editing
+// a student). Teachers see the classes they are assigned to; admins see all.
 router.get('/classes', teacherGuard, asyncHandler(async (req, res) => {
   res.json({ items: await service.listTeacherClasses(req.user, req.query.gradeLevel) });
 }));
 
+// Admin-only: create a class section (e.g. "Lớp 2/1").
 router.post(
   '/classes',
-  teacherGuard,
+  adminOnly,
   validate(createTeacherClassSchema),
   asyncHandler(async (req, res) => {
     res.status(201).json(await service.createTeacherClass(req.body, req.user));
   }),
 );
 
-router.delete('/classes/:id', teacherGuard, asyncHandler(async (req, res) => {
+// Admin-only: delete a class section.
+router.delete('/classes/:id', adminOnly, asyncHandler(async (req, res) => {
   res.json(await service.deleteTeacherClass(req.params.id, req.user));
 }));
 
