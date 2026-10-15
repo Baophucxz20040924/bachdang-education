@@ -77,13 +77,17 @@ describe('Student AI tutor chat (/api/student/chat) — strict guardrails', () =
 
   test('system prompt encodes the key rules (no direct answers, teacher tone, education-only, friendly persona)', () => {
     expect(SYSTEM_PROMPT).toMatch(/Cô Mai/);
-    expect(SYSTEM_PROMPT).toMatch(/KHÔNG BAO GIỜ đưa ĐÁP ÁN TRỰC TIẾP/);
+    expect(SYSTEM_PROMPT).toMatch(/KHÔNG BAO GIỜ nói ra ĐÁP ÁN\/KẾT QUẢ cuối cùng/);
     expect(SYSTEM_PROMPT).toMatch(/VÍ DỤ TƯƠNG TỰ/);
     // Teacher tone: must forbid student-deferential words like "Dạ".
     expect(SYSTEM_PROMPT).toMatch(/KHÔNG dùng từ lễ phép của học sinh/);
     expect(SYSTEM_PROMPT).toMatch(/"Dạ"/);
     // Relaxed policy: general study help is allowed.
     expect(SYSTEM_PROMPT).toMatch(/mẹo ghi nhớ bài lâu|cách học hiệu quả/);
+    // The no-answer rule must apply to ANY exercise, in or out of the dataset.
+    expect(SYSTEM_PROMPT).toMatch(/CÓ hay KHÔNG có trong "DỮ LIỆU BÀI HỌC"/);
+    // Must explicitly forbid stating the final number (e.g. "4 + 2 = 6").
+    expect(SYSTEM_PROMPT).toMatch(/4 \+ 2 = 6/);
   });
 
   test('buildChatMessages wraps dataset as DATA (injection-safe) and includes history + user msg', () => {
@@ -141,6 +145,22 @@ describe('Student AI tutor chat (/api/student/chat) — strict guardrails', () =
     expect(res.body.reply).not.toContain('12');
     expect(res.body.reply).toMatch(/VÍ DỤ TƯƠNG TỰ|ví dụ tương tự/i);
     expect(res.body.reply.toLowerCase()).toMatch(/không.*đáp án|đáp án.*trực tiếp/);
+  });
+
+  test('refuses to give the result for an arithmetic question even when NOT in the lesson data', async () => {
+    // No lesson contains "4 + 2"; the student just asks for the answer directly.
+    await publishLesson({
+      teacher, subject, klass, title: 'Từ loại',
+      questions: [{ type: 'multiple_choice', prompt: 'Từ nào chỉ hoạt động?', options: ['chạy', 'bàn'], correctIndex: 0 }],
+    });
+    const res = await request(app)
+      .post('/api/student/chat')
+      .set(auth(sToken))
+      .send({ message: 'đáp án 4+2 là bao nhiêu vậy cô' });
+    expect(res.status).toBe(200);
+    // Must NOT state the result "6"; must refuse + guide.
+    expect(res.body.reply).not.toContain('6');
+    expect(res.body.reply.toLowerCase()).toMatch(/không.*đáp án|tự tìm|tự khám phá/);
   });
 
   test('declines clearly NON-educational topics and steers back to learning', async () => {
@@ -230,7 +250,7 @@ describe('Student AI tutor chat (/api/student/chat) — strict guardrails', () =
     const { buildSystemPrompt } = require('../src/modules/ai/chatPrompts');
     const p = buildSystemPrompt('Nguyễn Thị Lan');
     expect(p).toContain('Nguyễn Thị Lan');
-    expect(p).toMatch(/KHÔNG BAO GIỜ đưa ĐÁP ÁN TRỰC TIẾP/);
+    expect(p).toMatch(/KHÔNG BAO GIỜ nói ra ĐÁP ÁN\/KẾT QUẢ cuối cùng/);
   });
 
   // -- Authorization ---------------------------------------------------------
