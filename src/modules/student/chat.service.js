@@ -13,6 +13,7 @@ const Class = require('../../models/Class');
 const User = require('../../models/User');
 const { getProvider } = require('../ai/providerAdapter');
 const { buildChatMessages, MAX_MESSAGE_CHARS, DEFAULT_TUTOR_NAME } = require('../ai/chatPrompts');
+const { guardReply } = require('../ai/answerGuard');
 const { SESSION_STATUS } = require('../../config/constants');
 const { AppError } = require('../../utils/errors');
 
@@ -100,8 +101,12 @@ async function chat(studentId, { message, history }) {
     throw new AppError(502, 'AI_FAILED', 'Cô chưa trả lời được ngay bây giờ. Em thử lại sau một chút nhé! 😊');
   }
 
+  // Safety net: never let a direct answer/result leak through even if the model
+  // ignored the prompt and stated it.
+  const safeReply = guardReply(text, String(reply).trim());
+
   return {
-    reply: String(reply).trim(),
+    reply: safeReply,
     tutorName,
     lessonCount: lessons.length,
     grounded: lessons.length > 0,
